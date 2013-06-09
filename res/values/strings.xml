@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    
+    <string name="app_name">Ascii Art Camera</string>
+    <string name="about">Info</string>
+    <string name="bw">B and W</string>
+    <string name="grayscale">Grayscale</string>
+    <string name="savedto">was saved to</string>
+   <string name="invert">Invert</string> 
+    
+    <string name="unmount">Please unmount sdcard to save the file</string>
+    <string name="imsize">Resolution</string>
+    <string name="reset">Reset</string>
+    <string name="saveaspic">Save as picture</string>
+    <string name="saveastext">Save as text</string>
+    <string name="saveashtml">Save as HTML</string>
+    <string name="resizing">Processing...</string>
+    <string name="processing">Asciization</string>
+    <string name="colorize">Colorized</string>
+    
+    <string name="credits"> Also thx John Malcolm, Lukas Brunner and others  </string>
+    <string name="choosefn"> Please enter the filename </string>
+    <string name="savingfile"> Saving the file </string>
+    
+    <string name="settingssaved"> Default value was saved </string>
+    <string name="more"> Save and Share </string>
+    <string name="less"> Edit </string>
+    <string name="share"> Share </string>
+    
+    <string name="see_other"> Other apps </string>
+    <string name="donate"> Need food to make apps.\nCan you spare a couple of bucks? </string>
+    
+</resources>

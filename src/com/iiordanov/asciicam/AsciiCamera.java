@@ -1,0 +1,954 @@
+package com.iiordanov.asciicam;
+
+import static android.provider.MediaStore.MediaColumns.DATA;
+
+import static android.provider.MediaStore.MediaColumns.DISPLAY_NAME;
+import static android.provider.MediaStore.MediaColumns.MIME_TYPE;
+
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.List;
+import java.util.Set;
+
+import com.iiordanov.asciicam.PromptDialog.PromptDialogCallback;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ContentValues;
+import android.content.Context;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.DialogInterface.OnClickListener;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Matrix;
+import android.graphics.Bitmap.CompressFormat;
+import android.hardware.Camera;
+import android.hardware.Camera.AutoFocusCallback;
+import android.hardware.Camera.Parameters;
+import android.net.Uri;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.os.Debug;
+import android.os.Environment;
+import android.os.Handler;
+import android.provider.MediaStore.Images;
+import android.provider.MediaStore.Images.Media;
+import android.text.util.Linkify;
+import android.util.Log;
+import android.view.Display;
+import android.view.KeyEvent;
+import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
+import android.view.ViewGroup.LayoutParams;
+import android.view.animation.AnimationSet;
+import android.view.animation.AnimationUtils;
+import android.view.animation.RotateAnimation;
+import android.widget.Button;
+import android.widget.ImageButton;
+import android.widget.LinearLayout;
+import android.widget.RelativeLayout;
+import android.widget.TextView;
+import android.widget.Toast;
+import static android.provider.MediaStore.Images.Media.*;
+
+//import com.flurry.android.FlurryAgent;
+import com.nullwire.trace.ExceptionHandler;
+
+public class AsciiCamera extends Activity { 
+	
+	public static final String FLURRY_KEY = "5XTA9JZU68AALQHQNJYR";
+	
+	//screen size
+	static int s_screenHeight ;
+	static int s_screenWidth ;
+	
+	//base bitmap size
+	static int CONV_HEIGHT ;
+	static int CONV_WIDTH ;
+	
+	//global settings 
+	static BitmapSize[] s_availableSizes;
+	static BitmapSize s_bitmapSize;
+	
+	static boolean s_inverted;
+	static boolean s_grayscale; 
+	static boolean s_colorized; 
+	static boolean s_bw;
+	
+	static Bitmap s_defaultBitmap;
+	
+	public static String SAVE_DIR;// = "/sdcard/asciicamera/";
+	
+	private Uri m_lastUri;
+	private boolean m_offerChoosingName;
+	
+	Camera m_camera;
+	AsciiViewer m_viewer;
+	Preview m_preview;
+	boolean m_photoMode = true;
+	PicPreviewCallback m_prCallback = new PicPreviewCallback();
+	private Facade m_facade;
+	  
+	private static String s_aboutString = "� Evgeny Balandin, 2010 \nbalandin.evgeny@gmail.com";
+	
+	public static AsciiCamera s_instance;
+		
+	/** Called when the activity is first created. */ 
+    @Override     
+    public void onCreate(Bundle savedInstanceState) { 
+        super.onCreate(savedInstanceState); 
+        AsciiCamera.s_instance = this;
+         
+        Handler han = new Handler();
+         
+        ExceptionHandler.register(this, "http://android-exceptions-handler.appspot.com/exception.groovy",han);
+        
+        getWindow().setFlags(WindowManager.LayoutParams. FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        requestWindowFeature(Window.FEATURE_NO_TITLE); 
+        Display disp = ((WindowManager) this.getSystemService(
+				android.content.Context.WINDOW_SERVICE)).getDefaultDisplay();
+        AsciiCamera.s_screenHeight = disp.getHeight();
+        AsciiCamera.s_screenWidth = disp.getWidth();
+        AsciiCamera.CONV_HEIGHT = AsciiCamera.s_screenHeight;
+        AsciiCamera.CONV_WIDTH = AsciiCamera.s_screenWidth;
+        
+        
+        
+        
+        m_viewer = new AsciiViewer(this);
+        
+         if (getIntent() != null && getIntent().getAction() != null && getIntent().getAction().equals(Intent.ACTION_SEND)) {
+            Uri img = Uri.parse(getIntent().getExtras().get(Intent.EXTRA_STREAM).toString());        	 
+        	Bitmap b = null;
+        	try {
+				 b = Media.getBitmap(getContentResolver(), img);
+			} catch (FileNotFoundException e) {
+				e.printStackTrace();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+        	
+        	m_photoMode = false;
+    		setContentView(m_viewer);
+    		reset();
+    		
+    		if (AsciiCamera.s_defaultBitmap != null) {
+				AsciiCamera.s_defaultBitmap.recycle();
+			}
+			AsciiCamera.s_defaultBitmap = null;
+			AsciiCamera.s_instance.convertBitmapAsync(b
+					,new BitmapSize(AsciiCamera.CONV_WIDTH, AsciiCamera.CONV_HEIGHT));
+    		return;
+        }
+        
+        m_camera = Camera.open(); 
+         
+//        dont work on android > 2.0  
+//        Parameters pp = m_camera.getParameters();
+//        pp.setPictureSize(AsciiCamera.CONV_WIDTH , AsciiCamera.CONV_HEIGHT);
+//        m_camera.setParameters(pp);
+        
+        m_preview = new Preview(this, m_camera);
+        setContentView(m_preview);  
+        
+        m_preview.setOnClickListener(new View.OnClickListener() {
+			
+			@Override
+			public void onClick(View v) {
+				if (m_camera != null) {
+					m_camera.autoFocus(new AutoFocusCallback() {
+						
+						@Override
+						public void onAutoFocus(boolean success, Camera camera) {
+						   	
+						}    
+					});  
+				}
+				
+			}
+		});  
+        
+        //add button to the content view
+        RelativeLayout lay = (RelativeLayout)View.inflate(this, R.layout.relbutton, null);
+        ImageButton imb = (ImageButton) lay.findViewById(R.id.ShotButton);
+        TextView warn = (TextView) lay.findViewById(R.id.warning);
+        warn.setVisibility( AsciiCamera.isCardMounted() ? View.VISIBLE : View.GONE);
+        imb.setOnClickListener(new ImageButton.OnClickListener() {
+			
+			@Override
+			public void onClick(View v) {
+				makeShot();
+			}
+		});
+          
+        Button b = (Button) lay.findViewById(R.id.PickImage);
+        b.setOnClickListener(new Button.OnClickListener() {
+			
+			@Override
+			public void onClick(View arg0) {
+				pickFromAlbum();
+			}
+		});
+        
+        getWindow().addContentView(lay, new LayoutParams(LayoutParams.FILL_PARENT, LayoutParams.FILL_PARENT)); 
+   
+        reset();
+    }  
+    
+    @Override
+    protected void onStart() {
+    	//FlurryAgent.onStartSession(this, FLURRY_KEY);
+    	super.onStart();
+    }
+    
+    public Facade getFacade() {
+    	if (m_facade == null) { 
+    		m_facade = new Facade();;
+    	} 
+    	return m_facade;
+    }
+   
+	@Override
+	public boolean onKeyDown(int keyCode, KeyEvent event) {
+		 if (m_photoMode) { 
+
+			 if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||  keyCode == KeyEvent.KEYCODE_CAMERA) {
+				 makeShot();
+				 return true;
+			 } 
+		 } else {
+			 if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_BACK) {
+				 m_photoMode = true;
+				 restartApp();
+				 return true;
+			 } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN)  {
+				 m_viewer.changeTextSize(-1);
+				 return true;
+			 } else if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+				 m_viewer.changeTextSize(1);
+				 return true;
+			 } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+				 m_viewer.shift(0, 15);
+			 } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+				 m_viewer.shift(0, -15);
+			 } else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+				 m_viewer.shift(-15, 0);
+			 } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+				 m_viewer.shift(15, 0);
+			 } else if (keyCode == KeyEvent.KEYCODE_MENU) {
+				 Intent i = new Intent(this, NewMenu.class);
+				 startActivity(i); 
+				 return true;
+			 }
+			 
+			 m_viewer.invalidate();
+		 }
+		return super.onKeyDown(keyCode, event);
+	}
+	
+	void makeShot() {
+		m_photoMode = false;
+		m_camera.takePicture(null, null, new PicSettingCallback(this));
+		setContentImageViewer();
+		m_camera.stopPreview(); 
+	}   
+	
+	void setContentImageViewer() {
+		setContentView(m_viewer);
+	}
+    
+   	protected void colorize(boolean col) {
+		m_viewer.reset();
+		AsciiCamera.s_colorized = col;
+		AsciiCamera.s_grayscale = !col;
+	}
+	
+    protected void flipGrayscale() {
+    	m_viewer.reset();
+		AsciiCamera.s_grayscale =! AsciiCamera.s_grayscale;
+	}
+    
+	protected void invert() {
+		m_viewer.reset();
+    	AsciiCamera.s_inverted =! AsciiCamera.s_inverted;
+  	}
+
+	protected void changeResolution() {
+		m_viewer.reset();
+		convert();
+	}
+	
+	@Override
+	protected void onStop() {
+		super.onStop();
+		//FlurryAgent.onEndSession(this);
+		if (m_camera != null ) {
+			m_camera.release();		
+		}
+	}  
+
+	/**
+	 * Saves aspect ratio
+	 * @param b
+	 * @param width
+	 * @return
+	 */
+	private Bitmap resizeBitmap(Bitmap b) {
+		
+		if (b.getWidth() < AsciiCamera.CONV_WIDTH 
+				&& b.getHeight() < AsciiCamera.CONV_HEIGHT) {
+			
+			return b;
+		}
+		
+		float ratio = ((float)b.getWidth()) / ((float)b.getHeight());
+		boolean horiz = ratio > 1.0f;
+		
+		if (horiz) { //simply resize
+			int height = (int) (AsciiCamera.CONV_WIDTH / ratio);
+			return resizeBitmap(b, AsciiCamera.CONV_WIDTH, height);
+		} else { //rotate and resize
+			int width = (int) (AsciiCamera.CONV_WIDTH * ratio);
+			Bitmap rb = resizeBitmap(b, width, AsciiCamera.CONV_WIDTH);
+			Matrix m = new Matrix();
+			m.setRotate(-90, 0, 0);
+			m.postTranslate(0, AsciiCamera.CONV_HEIGHT);
+			return Bitmap.createBitmap(rb, 0, 0, rb.getWidth(), rb.getHeight(), m, false);
+		}
+	}
+	
+	private Bitmap resizeBitmap(Bitmap b, int w, int h) {
+		if (b == null) {  //strange error
+			restartApp();
+		}
+		
+		Bitmap b1 = Bitmap.createScaledBitmap(b, w, h , false);
+		if (AsciiCamera.s_defaultBitmap != b) {
+			b.recycle();	
+		}
+		
+		return b1;
+	}
+	
+	public void convert(Bitmap b) { 
+		if (b!=null) {
+			AsciiCamera.s_defaultBitmap = b;
+		}
+		convert();
+	}
+	
+	public void convert() {
+		convertBitmapAsync(AsciiCamera.s_defaultBitmap, 
+				AsciiCamera.s_bitmapSize);
+	}
+	
+	/**
+	 * Sync. convert the given bitmap
+	 */
+	public void convertBitmap(Bitmap b) {
+		Bitmap b1 = resizeBitmap(b);
+		m_viewer.m_bitmap = b1;
+		m_viewer.m_text = AsciiTools.convertBitmap(b1, new ProgressCallback() {
+			
+			@Override
+			public void update(Float f) {
+				m_viewer.m_waitProgress = f;
+				m_viewer.invalidate();
+			}
+		});	
+		m_viewer.postInvalidate();
+	}
+	
+	/**
+	 * Async. convert the given bitmap
+	 */
+	void convertBitmapAsync(Bitmap b, BitmapSize size) {
+		if (AsciiCamera.s_colorized) {
+			(new ConvertingColoredAsyncTask())
+			.setSize(size.m_w, size.m_h)
+			.execute(b);
+		} else {
+			(new ConvertingAsyncTask())
+			.setSize(size.m_w, size.m_h)
+			.execute(b);
+		}
+	}
+
+	void savePicture(boolean offerChoosingName) {
+		if (AsciiCamera.isCardMounted()) {
+			Toast.makeText(this, getString(R.string.unmount), Toast.LENGTH_SHORT).show();
+			return;
+		}
+		m_offerChoosingName = offerChoosingName;
+		Date d = Calendar.getInstance().getTime();
+		String fname = d.getHours()+"-"+d.getMinutes()+"-"+d.getSeconds()+".png";
+		m_viewer.savePicture(fname);
+	}
+	
+	private String getGrayscaleText() {
+		if (m_viewer.m_text == null) {
+			return "";
+		}
+		StringBuffer buf = new StringBuffer();
+		for (String s : m_viewer.m_text) {
+			buf.append(s);
+			buf.append("\n");
+		}
+		return buf.toString();
+	}
+	
+	private String getColorizedText() {
+		if (m_viewer.m_coloredText == null) {
+			return "";
+		}
+		
+		StringBuffer buf = new StringBuffer();
+        try {
+            InputStream is = getAssets().open("htmlbeg");
+            int size = is.available();
+            byte[] buffer = new byte[size];
+            is.read(buffer);
+            is.close();
+            String text = new String(buffer);
+            buf.append(text);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+		
+		
+		for (int i=0; i<m_viewer.m_coloredText.length; ++i)  {
+			for (int j=m_viewer.m_coloredText[i].length-1; j>0; --j) {
+				ColoredValue cv = m_viewer.m_coloredText[i][j];
+				
+				Integer in = new Integer(cv.color);
+				String symbol = cv.symbol;
+				
+			    buf.append("<font color=\"#");
+			    if (!symbol.equals(" ")) {
+			    	 buf.append(Integer.toHexString(in).substring(2));
+			    } else {
+			    	 buf.append("000");
+			    }
+			   
+			    buf.append("\">");
+			    buf.append(symbol.equals(" ") ? "0" : symbol);
+			    buf.append("</font>");
+			}
+			buf.append("<br>");
+		}
+		
+		try {
+            InputStream is = getAssets().open("htmlend");
+            int size = is.available();
+            byte[] buffer = new byte[size];
+            is.read(buffer);
+            is.close();
+            String text = new String(buffer);
+            buf.append(text);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+		
+		return buf.toString();
+	}
+	
+	private void saveText() {
+		if (AsciiCamera.isCardMounted()) {
+			Toast.makeText(this, getString(R.string.unmount),Toast.LENGTH_SHORT).show();
+			return;
+		}
+		
+		Date d = Calendar.getInstance().getTime();
+		String fname = d.getHours()+"-"+d.getMinutes()+"-"+d.getSeconds() + 
+			(AsciiCamera.s_colorized ? ".html" : ".txt");
+		
+		PromptDialog.prompt(fname, new PromptDialogCallback() {
+			
+			@Override
+			public void ok(String s) {
+				processSavingText(s);
+				Intent i = new Intent(AsciiCamera.this, NewMenu.class);
+				startActivity(i); 
+			}
+
+			@Override
+			public void cancel() {
+				Intent i = new Intent(AsciiCamera.this, NewMenu.class);
+				startActivity(i); 
+			}
+		}, this);
+	}
+	
+	void processSavingText(String fname) {
+    	FileWriter fw = null;
+		try {
+			File f = new File(AsciiCamera.SAVE_DIR + fname);
+			f.createNewFile();
+			
+			fw = new FileWriter(f);
+			fw.write( AsciiCamera.s_colorized ? 
+					getColorizedText() : 
+					getGrayscaleText());
+			
+			Toast.makeText(AsciiCamera.this, fname + 
+					getString(R.string.savedto) + " " +
+					AsciiCamera.SAVE_DIR, 1000).show();
+		}catch (FileNotFoundException e) {
+			e.printStackTrace();
+		} catch (IOException e) {
+			e.printStackTrace();
+		} finally {
+			if (fw!=null) {
+				try {
+					fw.close();
+				} catch (IOException e) {
+					e.printStackTrace();
+				}	
+			}
+		}
+	}
+	
+	//android:clearTaskOnLaunch is set, nevertheless sometimes onCreate isn't called... 
+	//then need to restart
+	void restartApp() {
+		//crapy solution :(
+		 Intent in = new Intent(this, AsciiCamera.class);
+		 onStop();
+		 startActivity(in);
+		 finish();
+	}
+	
+	void savePicture(String fname, final Bitmap b) {
+		    if (! m_offerChoosingName) {
+		    	processSavingPicture(fname, b);
+				Intent i = new Intent(Intent.ACTION_SEND);
+				i.putExtra(Intent.EXTRA_STREAM, m_lastUri);
+				i.setType("image/png");
+				startActivity(i);
+				return;
+		    }     
+		    
+			PromptDialog.prompt(fname, new PromptDialogCallback() {
+			         
+			@Override
+			public void ok(String s) {
+				processSavingPicture(s, b);
+				Intent i = new Intent(AsciiCamera.this, NewMenu.class);
+				startActivity(i); 
+			}
+
+			@Override
+			public void cancel() {
+				Intent i = new Intent(AsciiCamera.this, NewMenu.class);
+				startActivity(i); 
+			}
+		}, this);
+	}
+	
+	private Uri processSavingPicture(String fname, Bitmap b) {
+		m_lastUri = null;
+		if (b==null) {
+			throw new IllegalArgumentException("Bitmap is null");
+		}
+		
+		FileOutputStream fos = null;
+		try {
+			
+			File f = new File(AsciiCamera.SAVE_DIR + fname);
+			f.createNewFile();
+			
+			fos = new FileOutputStream(f);
+			b.compress(CompressFormat.PNG, 100, fos);
+			
+			ContentValues cv = new ContentValues();
+		    cv.put(DISPLAY_NAME, fname);
+		    cv.put(ORIENTATION, 90);
+		    cv.put(MIME_TYPE, "image/png");
+		    cv.put(DATA, AsciiCamera.SAVE_DIR + fname);
+		    Uri uri = AsciiCamera.s_instance.getContentResolver().insert(Images.Media.EXTERNAL_CONTENT_URI, cv);
+		    
+		    if (m_offerChoosingName) {
+		    Toast.makeText(AsciiCamera.s_instance, fname + " " +
+					AsciiCamera.s_instance.getString(R.string.savedto) + " " +
+					AsciiCamera.SAVE_DIR, 1000).show();
+		    }
+		    
+		    m_lastUri = uri;
+			return uri;
+		} catch (FileNotFoundException e) {
+			e.printStackTrace();
+			return null;
+		} catch (IOException e) {
+			e.printStackTrace();
+			return null;
+		}  finally {
+			try {
+				if (fos != null) {
+					fos.close();
+				}
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
+	}
+	
+	
+	public static boolean isCardMounted() {
+		return Environment.getExternalStorageState().equals(Environment.MEDIA_SHARED);
+	}
+	
+	/**
+	 * Show dialog asking if user wants to send a report. Used by remote-stacktrace
+	 * @param sendt
+	 */
+	public void showExceptionDialog(final Thread sendt) {
+		AlertDialog.Builder b = new AlertDialog.Builder(this);
+		b.setCancelable(false);
+		b.setTitle(getString(R.string.app_name)+" had crashed last time");
+		b.setMessage("Please press \"Send\" to submit report (~1Kb). \nPress \"Cancel\" to continue.");
+		b.setPositiveButton("Send", new OnClickListener() {
+			
+			@Override
+			public void onClick(DialogInterface dialog, int which) {
+				sendt.start();
+			}
+		});
+		b.setNegativeButton("Cancel", new OnClickListener() {
+			
+			@Override
+			public void onClick(DialogInterface dialog, int which) {
+				ExceptionHandler.cleanStackTraces();
+			}
+		});
+		b.create().show();
+	}
+	
+	/**
+	 * Show alert dialog e.g. telling the user camera could not be accessed and device needs restart. Used by Preview.
+	 */
+	public void showExceptionDialog(String title, String message) {
+		AlertDialog.Builder b = new AlertDialog.Builder(this);
+		b.setCancelable(false);
+		b.setTitle(title);
+		b.setMessage(message);
+		b.setPositiveButton("Ok", new OnClickListener() {
+			
+			@Override
+			public void onClick(DialogInterface dialog, int which) {
+				AsciiCamera.this.finish();
+			}
+		});
+		b.create().show();
+	}
+	
+	private void pickFromAlbum() {
+		m_photoMode = false;
+		setContentView(m_viewer);
+		m_camera.stopPreview(); 
+		Intent i = new Intent(Intent.ACTION_PICK);
+		i.setType("image/*");
+		startActivityForResult(i, 1); 
+	}
+	
+	@Override
+	protected void onActivityResult (int requestCode, int resultCode, Intent data) {
+		if (requestCode != 1) {
+			return;
+		}
+		
+		if (resultCode == Activity.RESULT_OK) {
+			//fetch image
+			try {
+				Bitmap bm = Media.getBitmap(getContentResolver(), data.getData());
+				if (AsciiCamera.s_defaultBitmap != null) {
+					AsciiCamera.s_defaultBitmap.recycle();
+				}
+				AsciiCamera.s_defaultBitmap = null;
+				AsciiCamera.s_instance.convertBitmapAsync(bm
+						,new BitmapSize(AsciiCamera.CONV_WIDTH, AsciiCamera.CONV_HEIGHT));
+			} catch (FileNotFoundException e) {
+				e.printStackTrace();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		} else if (resultCode == Activity.RESULT_CANCELED){
+			restartApp();
+		}
+	}
+	
+	private void reset() {
+		m_viewer.m_textsize = AsciiViewer.DEFAUL_FONT;
+		AsciiCamera.s_inverted = false;
+		AsciiCamera.s_bw = false;
+
+		SharedPreferences prefs = getSharedPreferences("asciicamera", MODE_PRIVATE);
+		AsciiCamera.s_grayscale = prefs.getBoolean("gs", false); 
+		AsciiCamera.s_colorized = prefs.getBoolean("col", true);
+		
+		AsciiCamera.s_bitmapSize = new BitmapSize(AsciiCamera.CONV_WIDTH, AsciiCamera.CONV_HEIGHT);
+		
+		m_viewer.reset();
+		m_viewer.resetTextSize();
+	}
+	
+	void share() {
+		savePicture(false);
+	}
+	
+	BitmapSize[] getResolutions() {
+		float w = AsciiCamera.s_defaultBitmap.getWidth(); //AsciiCamera.CONV_WIDTH;
+		float h = AsciiCamera.s_defaultBitmap.getHeight(); //AsciiCamera.CONV_HEIGHT;
+		float ratio = w/h;
+		float[] mp = {0.3f, 0.5f, 0.8f, 1f, 1.3f, 1.6f, 2f};
+		BitmapSize[] vec = new BitmapSize[mp.length];
+		for (int i=0; i<mp.length; ++i) {
+			int nw = (int) (w * mp[i]);
+			int nh = (int) (nw / ratio);
+			vec[i] = new BitmapSize(nw, nh);
+		}
+		return vec;
+	}
+	
+	// ==================  async stuff
+	
+	interface ProgressCallback {
+		void update(Float f);
+	}
+	
+	class ConvertingAsyncTask extends AsyncTask<Bitmap, Float, String[]> implements ProgressCallback {
+		private int s_w;
+		private int s_h;
+		
+		protected ConvertingAsyncTask setSize(int w, int h) {
+			s_w = w;
+			s_h = h;
+			return this;
+		}
+		
+        @Override
+		protected void onProgressUpdate(Float... values) {
+        	m_viewer.m_waitProgress = values[0];
+        	m_viewer.postInvalidate();
+ 		}
+
+		@Override
+        protected void onPreExecute() {
+			m_viewer.setWaiting(true);
+        } 
+		
+		@Override 
+		protected void onPostExecute(String[] result) {
+			m_viewer.m_text = result;
+			m_viewer.setWaiting(false);
+			m_viewer.postInvalidate();
+			AsciiCamera.s_bitmapSize = new BitmapSize(s_w, s_h);
+		}
+
+		@Override
+		protected String[] doInBackground(Bitmap... params) {
+			Bitmap b1;
+			if (s_w == AsciiCamera.CONV_WIDTH && s_h == AsciiCamera.CONV_HEIGHT) {
+				if (AsciiCamera.s_defaultBitmap == null)  {
+					AsciiCamera.s_defaultBitmap = resizeBitmap(params[0]);
+				}
+				b1 = AsciiCamera.s_defaultBitmap;
+			} else {
+				b1 = resizeBitmap(params[0], s_w, s_h);
+			}
+			AsciiCamera.s_availableSizes = getResolutions();
+			
+			m_viewer.m_bitmap = b1;
+			return AsciiTools.convertBitmap(b1, this);	
+		}
+		
+		@Override
+		public void update(Float f) {
+			publishProgress(f);
+		}
+	}
+	
+	class ConvertingColoredAsyncTask extends AsyncTask<Bitmap, Float, ColoredValue[][]> implements ProgressCallback {
+		private int s_w;
+		private int s_h;
+		
+		protected ConvertingColoredAsyncTask setSize(int w, int h) {
+			s_w = w;
+			s_h = h;
+			return this;
+		}
+		
+        @Override
+		protected void onProgressUpdate(Float... values) {
+        	m_viewer.m_waitProgress = values[0];
+        	m_viewer.postInvalidate();
+ 		}
+
+		@Override
+        protected void onPreExecute() {
+			m_viewer.setWaiting(true);
+        } 
+		
+		@Override 
+		protected void onPostExecute(ColoredValue[][] result) {
+			m_viewer.m_coloredText = result;
+			m_viewer.setWaiting(false);
+			m_viewer.postInvalidate();
+			AsciiCamera.s_bitmapSize = new BitmapSize(s_w, s_h);
+		}
+
+		@Override
+		protected ColoredValue[][] doInBackground(Bitmap... params) {
+			Bitmap b1;
+			if (s_w == AsciiCamera.CONV_WIDTH && s_h == AsciiCamera.CONV_HEIGHT) {
+				if (AsciiCamera.s_defaultBitmap == null)  {
+					AsciiCamera.s_defaultBitmap = resizeBitmap(params[0]);
+				}
+				b1 = AsciiCamera.s_defaultBitmap;
+			} else {
+				b1 = resizeBitmap(params[0], s_w, s_h);
+			}
+			AsciiCamera.s_availableSizes = getResolutions();
+			
+			m_viewer.m_bitmap = b1;
+			ColoredValue[][] v = AsciiTools.convertColorBitmap(b1, this);	
+			return v;
+		}
+		
+		@Override
+		public void update(Float f) {
+			publishProgress(f);
+		}
+
+	}
+	
+	public class Facade  {
+		
+		public void setTextSize(int ts) {
+			m_viewer.setTextSize(ts + 4);
+		}
+		
+		public void setInverted(boolean inverted) {
+			if (inverted != s_inverted) {
+				invert();
+		    	convert();
+			}
+		}  
+		
+		BitmapSize lastSize;
+		{
+			if (AsciiCamera.s_defaultBitmap == null) {
+				lastSize = new BitmapSize(AsciiCamera.CONV_WIDTH, AsciiCamera.CONV_HEIGHT);
+			} else {
+				lastSize = new BitmapSize(AsciiCamera.s_defaultBitmap.getWidth(),
+						AsciiCamera.s_defaultBitmap.getHeight());
+			}
+		}
+		
+		public void setImageSize(BitmapSize bm) {
+//			BitmapSize cursize = new BitmapSize(AsciiCamera.s_defaultBitmap.getWidth(),
+//					AsciiCamera.s_defaultBitmap.getHeight());
+//			if (! bm.equals(cursize)) {
+//				AsciiCamera.s_bitmapSize = bm;
+//				convert();
+//			}
+			
+			if (! bm.equals(lastSize)) {
+				AsciiCamera.s_bitmapSize = bm;
+				convert();
+			}
+		}
+		
+		public void setGrayscale(boolean gs) {
+			if (gs != AsciiCamera.s_grayscale) {
+				flipGrayscale();
+				convert();
+			}
+		}
+		
+		
+		public void setBW(boolean bw) {
+			if (bw != AsciiCamera.s_bw) {
+				AsciiCamera.s_bw = bw;
+				m_viewer.reset();
+				convert();
+			}
+		}
+		
+		public void setColorized(boolean col) {
+			if (AsciiCamera.s_colorized != col) {
+				AsciiCamera.this.colorize(col);
+				convert();
+			}
+		}
+		
+		public void reset() {
+			AsciiCamera.this.reset();
+			AsciiCamera.this.convert();
+		}
+		 
+		public int getTextSize() {
+			return m_viewer.m_textsize - 4;
+		}
+		
+		public boolean isGrayscale() {
+			return AsciiCamera.s_grayscale;
+		}
+		
+		public boolean isInverted() {
+			return AsciiCamera.s_inverted;
+		}
+		
+		public BitmapSize[] getAvailableSizes() {
+			return getResolutions();
+		}
+		
+		public int getCurrentWidth() {
+			return AsciiCamera.s_bitmapSize.m_w;
+		}
+		
+		public int getCurrentHeight() {
+			return AsciiCamera.s_bitmapSize.m_h;
+		}
+		
+		public void saveText() {
+			 AsciiCamera.this.saveText();
+		}
+		
+		public void savePicture() {
+			AsciiCamera.this.savePicture(true);
+		}
+
+		public void pickFromAlbum() {
+			AsciiCamera.s_instance.pickFromAlbum();
+		}
+		
+		public void share() {
+			AsciiCamera.s_instance.share();
+		}
+
+	}
+	
+} 
+
+
+
+
+
+
+
